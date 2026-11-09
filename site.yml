@@ -1,0 +1,87 @@
+
+---
+- name: Deploy Flask application using Docker
+  hosts: devasc
+  gather_facts: false
+
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+
+    - name: Create Flask build directory
+      file:
+        path: "/home/devasc/{{ student_number }}_flask"
+        state: directory
+        mode: '0755'
+
+    - name: Create Flask application
+      copy:
+        dest: "/home/devasc/{{ student_number }}_flask/app.py"
+        content: |
+          import os
+          from flask import Flask
+
+          app = Flask(__name__)
+
+          student_number = os.environ.get("STUDENT_NUMBER")
+
+          @app.route("/")
+          def home():
+              return f"<h1>{student_number}</h1>"
+
+          if __name__ == "__main__":
+              app.run(host="0.0.0.0", port=5000)
+        mode: '0644'
+
+    - name: Create Dockerfile
+      copy:
+        dest: "/home/devasc/{{ student_number }}_flask/Dockerfile"
+        content: |
+          FROM python:3.9-slim
+          WORKDIR /app
+          RUN pip install --no-cache-dir flask
+          COPY ./app.py /app/app.py
+          EXPOSE 5000
+          CMD ["python", "app.py"]
+        mode: '0644'
+
+    - name: Build Docker image
+      command: docker build -t {{ image_name }} .
+      args:
+        chdir: "/home/devasc/{{ student_number }}_flask"
+
+    - name: Remove existing container
+      command: docker rm -f {{ container_name }}
+      failed_when: false
+      changed_when: false
+
+    - name: Run Flask container
+      command: >
+        docker run -d
+        --name {{ container_name }}
+        -p {{ host_port }}:5000
+        -e STUDENT_NUMBER={{ student_number }}
+        {{ image_name }}
+
+ - name: Wait for Flask application
+      wait_for:
+        host: localhost
+        port: "{{ host_port }}"
+        state: started
+        delay: 2
+        timeout: 30
+
+    - name: Request Flask application
+      uri:
+        url: "http://localhost:{{ host_port }}"
+        method: GET
+        return_content: yes
+      register: flask_response
+
+    - name: Verify student number
+      assert:
+        that:
+          - student_number in flask_response.content
+        success_msg: "SUCCESS: Student number displayed correctly."
+        fail_msg: "FAILED: Student number was not found."
